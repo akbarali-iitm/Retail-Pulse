@@ -1,467 +1,422 @@
-# RetailPulse — End-to-End Retail Data Engineering Pipeline
+# RetailPulse --- End-to-End Retail Data Engineering Pipeline
 
-**RetailPulse** is an end-to-end data engineering project designed to transform raw retail transaction data into clean, reliable, and analytics-ready datasets.
+RetailPulse is a portfolio data engineering project that transforms the
+**UCI Online Retail II** dataset into validated, analytics-ready data
+and loads it into a PostgreSQL analytical warehouse.
 
-The project demonstrates how SQL, Python, and PySpark can be used to build an ETL pipeline that handles data ingestion, cleaning, validation, transformation, and loading into a relational data warehouse.
+It demonstrates a practical ETL workflow using **Python, PySpark, SQL,
+PostgreSQL, and pytest**, with Bronze--Silver--Gold data organization,
+data-quality checks, dimensional modeling, reconciliation, query-plan
+analysis, and reusable transformation code.
 
-The goal is to simulate a practical data engineering workflow used in real-world businesses, where data from different sources must be processed consistently before it can be used for reporting and decision-making.
+> **Current status:** Core batch processing, PostgreSQL warehouse
+> loading, reconciliation checks, transformation logging, and six
+> automated transformation tests have been implemented and validated.
+> Incremental loading and automated orchestration are not currently
+> implemented.
 
-## 1. Problem Statement
+## Contents
 
-Retail businesses generate large volumes of transaction data containing information about invoices, products, customers, quantities, prices, and transaction dates.
+-   [Problem statement](#problem-statement)
+-   [Technology stack](#technology-stack)
+-   [Dataset](#dataset)
+-   [Architecture](#architecture)
+-   [Implemented pipeline](#implemented-pipeline)
+-   [Data-quality and transaction
+    rules](#data-quality-and-transaction-rules)
+-   [PostgreSQL warehouse](#postgresql-warehouse)
+-   [Validation results](#validation-results)
+-   [Query-plan benchmarking](#query-plan-benchmarking)
+-   [Repository structure](#repository-structure)
+-   [Run the tests](#run-the-tests)
+-   [Reproduce the notebook workflow](#reproduce-the-notebook-workflow)
+-   [Limitations and next steps](#limitations-and-next-steps)
 
-However, raw data is not always ready for analysis. It may contain:
+## Problem statement
 
-- Missing customer information or product descriptions.
-- Duplicate transaction records.
-- Invalid quantities, prices, or timestamps.
-- Cancelled orders and returned products.
-- Inconsistent data types and formatting.
+Retail transaction data can contain missing customer identifiers and
+product descriptions, repeated records, cancellations, returns, invalid
+values, and inconsistent source formats. Loading it directly into
+reporting tables can produce misleading results.
 
-If this data is loaded directly into a reporting system, it can lead to inaccurate sales metrics and unreliable business decisions.
+RetailPulse processes the source data through explicit transformation
+and validation steps, preserves data-quality information, and loads the
+resulting records into a relational warehouse for SQL analysis.
 
-RetailPulse addresses this problem by building a repeatable data pipeline that processes raw transaction data, applies data quality checks, and stores validated information in a structured analytical warehouse.
+## Technology stack
 
-## 2. Project Objectives
+  -----------------------------------------------------------------------
+  Technology                          Role
+  ----------------------------------- -----------------------------------
+  Python                              Pipeline logic, reusable
+                                      transformations, logging, and tests
 
-- Build an end-to-end ETL pipeline using Python and PySpark.
-- Process structured retail transaction data.
-- Clean, validate, and transform raw records.
-- Implement data quality checks and duplicate detection.
-- Design a relational data warehouse using dimensional modeling.
-- Use SQL to answer business questions and generate analytical insights.
-- Implement incremental loading and prevent duplicate processing.
-- Evaluate query and transformation performance.
-- Maintain readable, testable, and version-controlled code.
+  PySpark                             Data standardization,
+                                      classification, validation, and
+                                      aggregation
 
-## 3. Technology Stack
+  PostgreSQL                          Relational analytical warehouse
 
-| Technology | Purpose |
-|---|---|
-| Python | Pipeline logic, ingestion, validation, and error handling |
-| PySpark | Data transformation, filtering, joins, and aggregations |
-| SQL | Data analysis, warehouse queries, and data validation |
-| PostgreSQL | Relational database and analytical data warehouse |
-| CSV / JSON / Parquet | Data ingestion and intermediate storage formats |
-| Git and GitHub | Version control and project documentation |
-| Pytest | Automated testing of transformations and data quality |
-| Docker Compose (optional) | Reproducible local environment |
+  SQL                                 Warehouse validation, analytical
+                                      queries, and query-plan inspection
 
-The project will initially run locally. Cloud platforms such as Databricks and Snowflake can be explored as future extensions after the core pipeline is working.
+  Parquet and CSV                     Intermediate and analytical data
+                                      storage
 
-## 4. Dataset
+  pytest                              Automated transformation tests
 
-The project will use the **UCI Online Retail II** dataset.
+  Git and GitHub                      Version control and project
+                                      documentation
 
-Dataset: https://archive.ics.uci.edu/dataset/502/online+retail+ii
+  Google Colab                        Development and execution
+                                      environment
+  -----------------------------------------------------------------------
 
-The dataset contains retail transaction records covering approximately two years of online sales activity.
+## Dataset
 
-Important fields include:
+**Source:** [UCI Online Retail
+II](https://archive.ics.uci.edu/dataset/502/online+retail+ii)
 
-- `Invoice`: Invoice or transaction identifier.
-- `StockCode`: Product identifier.
-- `Description`: Product description.
-- `Quantity`: Number of units purchased or returned.
-- `InvoiceDate`: Transaction timestamp.
-- `Price`: Unit price.
-- `Customer ID`: Customer identifier.
-- `Country`: Customer's country.
+The workbook contains two worksheets: `Year 2009-2010` and
+`Year 2010-2011`. The pipeline ingested **1,067,371 rows** across both
+worksheets. Relevant fields include invoice, stock code, product
+description, quantity, invoice date, unit price, customer ID, and
+country. The source worksheet is retained as lineage information.
 
-The dataset is suitable for practising data cleaning, transaction processing, SQL analytics, and PySpark transformations on a realistic dataset.
+The source dataset and generated data outputs are not committed to this
+repository. Download the dataset from UCI when reproducing the full
+workflow.
 
-## 5. Application Architecture and Data Flow
+## Architecture
 
-RetailPulse follows a simplified **Bronze–Silver–Gold architecture**, also known as the Medallion Architecture.
-
-```text
-             UCI Online Retail II Dataset
-                         |
-                         v
-                 1. Data Ingestion
-                  Python + PySpark
-                         |
-                         v
-                 2. Bronze Layer
-                Raw Data Preservation
-                         |
-                         v
-                3. Silver Layer
-              Cleaning and Validation
-                         |
-             +-----------+-----------+
-             |                       |
-             v                       v
-       Valid Records           Rejected Records
-             |                 Quality Reports
+``` text
+UCI Online Retail II workbook
+             |
              v
-                 4. Gold Layer
-             Business Transformations
-                         |
-                         v
-                 5. PostgreSQL
-                Data Warehouse
-                         |
-                         v
-                 6. SQL Analytics
-            Revenue and Product Insights
+      Python ingestion
+             |
+             v
+       Bronze layer
+   Source rows / Parquet
+             |
+             v
+       Silver layer
+ Standardization, transaction
+ classification, quality flags
+             |
+       +-----+------+
+       |            |
+       v            v
+  Valid records  Rejected records
+       |
+       v
+        Gold layer
+  Line values and analytical
+  monthly/product/country summaries
+       |
+       v
+   PostgreSQL warehouse
+  Fact table + dimensions
+       |
+       v
+    SQL analytics and
+   query-plan experiments
 ```
 
-### Step 1: Data Ingestion
+The architecture follows the Bronze--Silver--Gold pattern. In the
+validated run, all records passed the structural validation rules, so
+the rejected dataset contained zero rows. Quality issues such as missing
+customer IDs and descriptions remain represented as flags rather than
+being silently discarded.
 
-The pipeline reads the downloaded retail dataset using Python and PySpark.
+## Implemented pipeline
 
-During ingestion, it will:
+### 1. Ingestion and Bronze
 
-- Load the source file.
-- Validate expected column names and data types.
-- Record the batch identifier and ingestion timestamp.
-- Capture the number of records received.
-- Preserve the original input for traceability.
+-   Read both worksheets from the Online Retail II workbook.
+-   Stream worksheet rows to CSV with a `SourceSheet` field.
+-   Convert Bronze data to Parquet for downstream Spark processing.
+-   Preserve source-sheet lineage.
 
-The original dataset will remain unchanged so that later processing can be audited and repeated.
+### 2. Silver transformations
 
-### Step 2: Bronze Layer — Raw Data
+Reusable functions are implemented in
+`src/retailpulse/transformations.py`:
 
-The Bronze layer stores the ingested data with minimal modification.
+-   `standardize_columns()` standardizes column names, trims text, and
+    casts data types.
+-   `classify_transactions()` assigns a transaction category and
+    attaches data-quality flags.
+-   `split_valid_and_rejected()` separates structural rejects from
+    accepted records.
+-   `transform_bronze_to_silver()` composes the transformation steps and
+    logs processing counts and errors.
 
-Its purpose is to maintain a recoverable copy of the source records and provide a consistent starting point for subsequent processing.
+Malformed quantities are handled with a tolerant cast so invalid values
+can be identified and rejected through validation instead of
+unexpectedly terminating the transformation.
 
-The raw data can be stored in CSV or converted to Parquet for more efficient downstream processing.
+### 3. Gold outputs
 
-### Step 3: Silver Layer — Cleaning and Validation
+The Gold layer calculates transaction line value as:
 
-PySpark processes the raw data and applies data quality rules.
+`line_value = quantity × unit_price`
 
-Examples include:
+It also derives transaction date and calendar fields used for monthly
+analysis. Analytical summaries are saved for monthly activity, product
+performance, and country-level activity.
 
-- Standardizing column names and data types.
-- Handling missing values.
-- Identifying duplicate records.
-- Validating quantities, prices, and timestamps.
-- Identifying cancellation transactions and returns.
-- Separating invalid records for further investigation.
+**Interpretation note:** line value is a signed transaction measure, not
+automatically equivalent to recognized net revenue or profit.
+Cancellation, return, and accounting-adjustment treatment must be
+considered when interpreting business metrics.
 
-Records that pass validation continue to the next stage. Rejected records are retained separately with rejection reasons rather than being silently discarded.
+### 4. PostgreSQL warehouse
 
-Data quality metrics, such as accepted records, rejected records, and duplicate counts, will be recorded for each batch.
+The PostgreSQL warehouse uses a star-schema design with one fact table
+and four dimensions. The warehouse is loaded in batches, and the
+fact-table full-refresh operation runs inside a transaction so that
+failures can be rolled back.
 
-### Step 4: Gold Layer — Business-Ready Data
+### 5. Logging and error handling
 
-The Gold layer contains cleaned and transformed data prepared for analytical use.
+`src/retailpulse/logging_config.py` configures console and file logging.
+The transformation pipeline logs its start, classified/accepted/rejected
+counts, completion, and exceptions. The default log file is
+`logs/pipeline.log`; generated logs are excluded from Git.
 
-Business transformations may include:
+## Data-quality and transaction rules
 
-- Calculating transaction line values.
-- Aggregating sales by month.
-- Summarizing product performance.
-- Calculating customer-level spending.
-- Analysing country-level sales.
-- Tracking cancellation and return activity.
+The current transaction-classification precedence is:
 
-Revenue calculations will distinguish ordinary sales from cancellations and returns so that business metrics remain meaningful.
+1.  `ACCOUNTING_ADJUSTMENT`: invoice starts with `A`, stock code equals
+    `B`, or description contains `adjust bad debt`.
+2.  `CANCELLATION_OR_CREDIT`: invoice starts with `C`, unless a
+    preceding accounting-adjustment rule matched.
+3.  `RETURN_OR_NEGATIVE_QUANTITY`: quantity is negative, unless a
+    preceding rule matched.
+4.  `STANDARD_TRANSACTION`: all other records.
 
-### Step 5: PostgreSQL Data Warehouse
+Structural rejection conditions are missing invoice, missing stock code,
+invalid quantity, invalid invoice date, invalid unit price, or missing
+country.
 
-The processed data will be loaded into PostgreSQL using a dimensional data model.
+Missing customer IDs, missing descriptions, zero unit prices, and
+negative unit prices are captured as quality flags; they do not alone
+trigger rejection. Repeated business records were investigated, but
+records were not automatically deduplicated.
 
-The initial warehouse will use a simple star schema.
+These rules are project-specific classifications, not a guarantee that
+every source transaction has been assigned its final accounting meaning.
 
-**Fact table: `fact_sales`**
+## PostgreSQL warehouse
 
-Stores transaction-level measures and references to relevant dimensions.
+### Schema
 
-Potential fields include:
+  Table            Purpose
+  ---------------- ----------------------------------------------------
+  `fact_sales`     Transaction-level measures and foreign keys
+  `dim_product`    Product identifier and description
+  `dim_customer`   Customer identifier
+  `dim_date`       Calendar date, month, quarter, and year attributes
+  `dim_country`    Country identifier and name
 
-- Invoice identifier.
-- Product, customer, and date keys.
-- Quantity.
-- Unit price.
-- Line value.
+Indexes were created for common fact-table lookup and filtering columns,
+including date, product, customer, and invoice.
 
-**Dimension tables:**
+### Loaded row counts
 
-- `dim_product` — Product identifiers and descriptions.
-- `dim_customer` — Customer identifiers.
-- `dim_date` — Calendar attributes for time-based analysis.
-- `dim_country` — Geographic information.
+  Table                   Rows
+  ---------------- -----------
+  `fact_sales`       1,067,371
+  `dim_product`          5,304
+  `dim_customer`         5,942
+  `dim_country`             43
+  `dim_date`               604
 
-Appropriate primary keys, foreign keys, data types, and uniqueness constraints will be implemented where applicable.
+Customer IDs missing from the source remain unmatched to a customer
+dimension row, while the fact record itself is retained with a nullable
+customer foreign key.
 
-This model will make analytical queries easier to understand and maintain.
+## Validation results
 
-### Step 6: SQL Analytics
+The completed run was checked for row-count consistency, required-field
+nulls, dimensional referential integrity, line-value calculations, and
+date-key consistency.
 
-SQL will be used to answer practical retail business questions, including:
+  Check                                             Result
+  ------------------------------------------------- -----------
+  Classified records                                1,067,371
+  Accepted records                                  1,067,371
+  Rejected records                                  0
+  Fact-table records                                1,067,371
+  Distinct invoices                                 53,628
+  Fact rows without a known customer                243,007
+  Orphaned dimension foreign keys                   0
+  Incorrect line-value calculations                 0
+  Invoice/date-dimension mismatches                 0
+  Silver-to-warehouse signed-value reconciliation   Passed
 
-- What is the monthly sales trend?
-- Which products generate the highest revenue?
-- Which countries contribute the most to sales?
-- Who are the highest-spending customers?
-- Which products have the highest return or cancellation activity?
-- How does sales performance change from one month to the next?
+The signed total of `line_value` reconciled to **19,287,250.5680**
+across Silver and the warehouse in the validated run. This is a signed
+total across classified source transactions; it should not be presented
+as audited net revenue.
 
-The project will demonstrate joins, aggregations, Common Table Expressions (CTEs), window functions, date operations, and query optimization.
+### Transaction classifications
 
-### Step 7: Data Quality, Logging, and Reliability
+  Transaction type                           Rows
+  ------------------------------- ---------------
+  `STANDARD_TRANSACTION`                1,044,414
+  `CANCELLATION_OR_CREDIT`                 19,494
+  `RETURN_OR_NEGATIVE_QUANTITY`             3,457
+  `ACCOUNTING_ADJUSTMENT`                       6
+  **Total**                         **1,067,371**
 
-The pipeline will include basic reliability mechanisms so that it behaves like a real data engineering application.
+All ten warehouse validation checks in the final validation cell passed,
+including row-count and signed-value reconciliation. A transaction
+rollback test also confirmed that a failed insert did not leave partial
+rows in the test transaction.
 
-These will include:
+## Query-plan benchmarking
 
-- Record-count reconciliation between processing stages.
-- Validation of required columns and data types.
-- Duplicate detection and uniqueness checks.
-- Logging of batch status and processing errors.
-- Safe handling of rejected records.
-- Idempotent loading so that rerunning a batch does not create duplicate warehouse records.
-- Automated tests for transformation logic and data quality rules.
+A monthly product aggregation query against `fact_sales` was inspected
+with PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)`. The query filters December
+2010 records and aggregates results by product.
 
-Incremental loading will be added after the initial full-load pipeline works correctly.
+Six runs were measured for each configuration:
 
-## 6. Repository Structure
+  Metric                     Default planner   Bitmap-preferred diagnostic configuration
+  ------------------------ ----------------- -------------------------------------------
+  Access method observed          Index Scan                            Bitmap Heap Scan
+  Median execution time           158.902 ms                                  142.706 ms
+  Minimum execution time           80.027 ms                                  106.615 ms
+  Maximum execution time          203.122 ms                                  163.804 ms
 
-The project will use a simple structure without excessive modularization.
+The bitmap-preferred configuration had a median approximately **10.2%
+lower** in this experiment. However, the default planner produced the
+fastest individual run. These are observations from a limited benchmark
+in a shared Colab environment, not a general guarantee of improved
+performance. The diagnostic planner settings were used for comparison;
+PostgreSQL's normal planner remains the default.
 
-```text
-retailpulse/
-│
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── README.md
-│
-├── notebooks/
-│   └── exploration.ipynb
-│
-├── src/
-│   └── pipeline.py
-│
-├── sql/
-│   ├── schema.sql
-│   └── analytics.sql
-│
-├── tests/
-│   └── test_pipeline.py
-│
-├── logs/
-│
-├── requirements.txt
-├── .env.example
+## Repository structure
+
+``` text
+Retail-Pulse/
 ├── .gitignore
-├── docker-compose.yml
-└── README.md
+├── README.md
+├── LICENSE
+├── src/
+│   └── retailpulse/
+│       ├── __init__.py
+│       ├── logging_config.py
+│       └── transformations.py
+└── tests/
+    └── test_transformations.py
 ```
 
-### Directory Overview
+The working Colab environment also contains data-layer outputs, logs,
+and the notebook. Large raw data, generated Parquet/CSV outputs, logs,
+caches, and environment files are excluded from Git by `.gitignore`. Add
+the notebook to the repository separately if you want it directly
+accessible from GitHub.
 
-- `data/raw/`: Original downloaded dataset.
-- `data/processed/`: Intermediate or transformed data files.
-- `notebooks/`: Initial data exploration and experimentation.
-- `src/pipeline.py`: Main pipeline containing ingestion, cleaning, transformation, and loading logic.
-- `sql/schema.sql`: Warehouse tables and constraints.
-- `sql/analytics.sql`: Business analysis queries.
-- `tests/test_pipeline.py`: Automated tests for core pipeline logic.
-- `logs/`: Local pipeline execution logs.
-- `requirements.txt`: Python dependencies.
-- `.env.example`: Example configuration variables without real credentials.
-- `docker-compose.yml`: Optional local service configuration.
+## Run the tests
 
-As the project grows, `pipeline.py` can be split into smaller modules only when doing so improves readability or testing.
+The transformation tests were run successfully in Google Colab with
+Python 3.13, pytest 8.4.2, and PySpark 4.0.4.
 
-## 7. Step-by-Step Implementation Plan
+From the repository root, install compatible versions of PySpark and
+pytest in your Python environment, then run:
 
-The project will be developed incrementally, ensuring that every stage works before moving to the next.
-
-### Phase 1: Environment Setup and Data Exploration
-
-1. Create the GitHub repository.
-2. Set up a Python virtual environment.
-3. Install PySpark, PostgreSQL dependencies, pandas, and Pytest.
-4. Download the UCI Online Retail II dataset.
-5. Inspect its columns, data types, missing values, and duplicate records.
-6. Write initial SQL queries to understand the data.
-
-**Deliverable:** A working development environment and an initial understanding of the source data.
-
-### Phase 2: Build the Initial ETL Pipeline
-
-1. Read the source data using PySpark.
-2. Validate the input schema.
-3. Preserve the raw data in the Bronze layer.
-4. Apply cleaning and validation rules.
-5. Separate rejected records from valid records.
-6. Generate initial data quality statistics.
-
-**Deliverable:** A working raw-to-cleaned data pipeline.
-
-### Phase 3: Implement Business Transformations
-
-1. Calculate transaction line values.
-2. Handle cancellation and return records according to documented rules.
-3. Create product-level and customer-level summaries.
-4. Generate monthly and geographic sales aggregations.
-5. Save the transformed datasets in the Gold layer.
-
-**Deliverable:** Analytics-ready data generated through PySpark.
-
-### Phase 4: Build the SQL Data Warehouse
-
-1. Create PostgreSQL database tables.
-2. Implement the fact and dimension tables.
-3. Define keys, relationships, and appropriate constraints.
-4. Load the processed data into the warehouse.
-5. Validate warehouse records against the transformed data.
-
-**Deliverable:** A functioning analytical data warehouse.
-
-### Phase 5: Implement Reliability and Incremental Loading
-
-1. Add batch identifiers and execution logs.
-2. Reconcile record counts across pipeline stages.
-3. Implement safe reruns and duplicate prevention.
-4. Add incremental processing using an appropriate record identifier or change-detection strategy.
-5. Test failure scenarios and recovery behaviour.
-
-**Deliverable:** A more reliable and repeatable ETL process.
-
-### Phase 6: SQL Analytics and Performance Optimization
-
-1. Write queries using joins, CTEs, aggregations, and window functions.
-2. Analyse monthly revenue and product performance.
-3. Examine query plans using PostgreSQL `EXPLAIN ANALYZE`.
-4. Test suitable indexes.
-5. Benchmark selected PySpark transformations and partitioning strategies.
-6. Document actual performance results and trade-offs.
-
-**Deliverable:** A collection of business queries and documented optimization experiments.
-
-### Phase 7: Testing and Documentation
-
-1. Add automated tests for data transformations.
-2. Test schema validation and duplicate detection.
-3. Validate data quality rules and rejected-record handling.
-4. Document the architecture and execution steps.
-5. Add sample outputs and benchmark results.
-6. Verify that the project can be reproduced from a clean environment.
-
-**Deliverable:** A documented, tested, and interview-ready GitHub repository.
-
-## 8. Setup and Execution
-
-The following commands illustrate the intended local setup. Exact dependencies and database configuration will be finalized during implementation.
-
-### 1. Clone the repository
-
-```bash
-git clone <your-repository-url>
-cd retailpulse
+``` bash
+PYTHONPATH=src python -m pytest -v tests/test_transformations.py
 ```
 
-### 2. Create a virtual environment
+**Latest verified result:** `6 passed`.
 
-```bash
-python -m venv .venv
-```
+The tests cover column standardization and data types,
+transaction-classification precedence, quality flags, invalid-quantity
+rejection, row-count reconciliation, and blank-text normalization.
 
-Activate it on Windows:
+## Reproduce the notebook workflow
 
-```bash
-.venv\Scripts\activate
-```
+The full ingestion, Gold aggregation, and PostgreSQL loading workflow
+was developed in Google Colab.
 
-Activate it on Linux or macOS:
+1.  Download Online Retail II from the [official UCI dataset
+    page](https://archive.ics.uci.edu/dataset/502/online+retail+ii).
+2.  Open the [Google Colab
+    notebook](https://colab.research.google.com/drive/1oSmk3IdYQYZrZBkvd0srynXZGVkoeIT0?usp=sharing).
+3.  Place the source workbook in the `data/raw/` location expected by
+    the notebook.
+4.  Execute the notebook cells in order to ingest the worksheets, build
+    Bronze/Silver/Gold outputs, and run validation.
+5.  Start PostgreSQL and create the warehouse schema using the SQL
+    definitions in the notebook.
+6.  Load the warehouse and run the reconciliation and analytics queries.
+7.  Run the automated transformation tests using the command above.
 
-```bash
-source .venv/bin/activate
-```
+The current repository does not yet include a complete standalone
+pipeline entry point, dependency lockfile, or all SQL scripts as
+separate files. The notebook is the reference for reproducing the
+end-to-end warehouse workflow.
 
-### 3. Install dependencies
+## Limitations and next steps
 
-```bash
-pip install -r requirements.txt
-```
+The current implementation is a working batch-processing portfolio
+project, not yet a scheduled production deployment.
 
-### 4. Configure PostgreSQL
+Potential improvements include:
 
-Create the local database and configure the connection using environment variables.
+-   Add a documented dependency file and standalone command-line
+    pipeline entry point.
+-   Add warehouse schema and analytics SQL as version-controlled `.sql`
+    files.
+-   Add CI to run transformation tests on every pull request.
+-   Implement incremental ingestion with a defined watermark or
+    change-detection strategy. The current fact loader uses a
+    transactional full refresh.
+-   Expand automated tests for warehouse loading, failure recovery, and
+    data-quality edge cases.
+-   Add orchestration and scheduling, for example with Apache Airflow.
+-   Add a dashboard for monthly trends, product activity, and quality
+    metrics.
+-   Explore a managed Spark environment or cloud object storage.
 
-Keep real database credentials out of source control.
+## Relevance to Data Engineer I
 
-### 5. Prepare the dataset
+  -----------------------------------------------------------------------
+  Skill                               Evidence in RetailPulse
+  ----------------------------------- -----------------------------------
+  Python                              Reusable transformations, logging,
+                                      error handling, automated tests
 
-Download Online Retail II from UCI and place the required source file in the location documented under `data/raw/`.
+  PySpark                             Standardization, classification,
+                                      validation, and aggregations
 
-### 6. Create the warehouse schema
+  SQL                                 Warehouse validation and analytical
+                                      queries
 
-```bash
-psql -U <username> -d <database> -f sql/schema.sql
-```
+  Data warehousing                    Fact/dimension model and
+                                      foreign-key relationships
 
-### 7. Run the pipeline
+  Data quality                        Structural validation, quality
+                                      flags, reconciliation
 
-```bash
-python src/pipeline.py
-```
+  PostgreSQL                          Batched loading, transactional full
+                                      refresh, indexes
 
-### 8. Execute analytics queries
+  Performance analysis                Query-plan inspection and repeated
+                                      timing measurements
 
-Run the queries in `sql/analytics.sql` against the populated PostgreSQL database.
+  Git                                 Source control and documented
+                                      project structure
+  -----------------------------------------------------------------------
 
-### 9. Run tests
+------------------------------------------------------------------------
 
-```bash
-pytest -v
-```
-
-These commands describe the planned execution workflow; they should be updated if the implementation or database setup changes.
-
-## 9. Expected Outcomes
-
-Once implemented, RetailPulse will demonstrate the ability to:
-
-- Build an ETL pipeline using Python and PySpark.
-- Work with structured datasets and handle common data-quality problems.
-- Design and populate a SQL-based analytical warehouse.
-- Write SQL queries for business reporting.
-- Implement basic data validation, reconciliation, and incremental processing.
-- Debug pipeline failures and test data transformations.
-- Evaluate performance using measurable evidence.
-- Maintain a clean GitHub repository with reproducible instructions.
-
-Performance improvements, processing times, and data-quality statistics will be documented after running the pipeline rather than being assumed in advance.
-
-## 10. Future Enhancements
-
-After completing the core implementation, the project may be extended with:
-
-- **Databricks:** Run the PySpark pipeline on a managed Spark platform.
-- **Snowflake:** Load Gold-layer data into a cloud data warehouse.
-- **Apache Airflow:** Schedule and orchestrate pipeline execution.
-- **Cloud storage:** Store raw and processed data in Amazon S3 or an equivalent service.
-- **Data visualization:** Build a small dashboard for sales trends and data quality metrics.
-- **CI/CD:** Run automated tests on GitHub whenever code changes.
-
-These enhancements are optional. The initial focus remains on building a correct, reliable, and well-tested pipeline using SQL, Python, PySpark, and PostgreSQL.
-
-## 11. Relevance to Data Engineer I
-
-RetailPulse is designed to demonstrate skills directly relevant to an entry-level data engineering position.
-
-| Job requirement | Project implementation |
-|---|---|
-| SQL proficiency | Analytical queries, joins, CTEs, window functions |
-| PySpark | DataFrame transformations, joins, aggregations |
-| ETL development | Ingestion, transformation, and warehouse loading |
-| Data warehousing | Fact tables, dimension tables, star schema |
-| Data quality | Validation, deduplication, reconciliation |
-| Troubleshooting | Logging, error handling, recovery |
-| Performance tuning | Query plans, indexing, Spark benchmarks |
-| Python | Pipeline implementation and automated tests |
-| Git | Version control and project documentation |
-
-**Project philosophy:** Start simple, make the pipeline correct, and then improve its reliability and performance. Every added component should solve a specific data engineering problem rather than add unnecessary complexity.
-
----
-
-*RetailPulse is a learning and portfolio project intended to demonstrate practical data engineering concepts using a public retail dataset.*
+*RetailPulse is a learning and portfolio project built with the public
+UCI Online Retail II dataset. The reported counts and timings describe
+the validated project run and benchmark; results may vary when the data,
+runtime, or environment changes.*
